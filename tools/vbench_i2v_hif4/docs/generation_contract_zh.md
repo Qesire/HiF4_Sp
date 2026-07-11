@@ -1,10 +1,10 @@
 # VBench-I2V 生成输入契约
 
-本工具包不负责视频生成，只负责把已经生成好的 mp4 整理成 VBench-I2V case input。生成阶段必须满足下面契约。
+本工具包同时支持两种 repeat 策略。二者含义不同，结果说明中必须明确记录。
 
-## 1. 每个 prompt 真实采样 5 次
+## 1. `exact`：严格官方采样语义（默认）
 
-对 full_info 中每个 image-prompt pair，需要真实调用生成模型 5 次，保存为：
+对 full_info 中每个 image-prompt pair 独立调用生成模型 5 次：
 
 ```text
 <prompt>-0.mp4
@@ -14,43 +14,75 @@
 <prompt>-4.mp4
 ```
 
-这 5 个文件应来自 5 次采样。可以使用固定基准 seed 加 index 偏移，也可以每个 repeat 记录独立随机 seed，但不能把一个 mp4 复制成 5 个文件。
-
-## 2. 推荐记录 seed manifest
-
-建议生成阶段同时写出一个 TSV/CSV：
-
-```text
-filename	prompt	image_name	dimension	repeat_index	seed	variant	checkpoint
-```
-
-这样 reviewer 可以确认：
-
-- repeat index 与文件名一致；
-- seed 不是事后挑选；
-- 不同 variant 的生成参数可追溯；
-- 评测失败时能定位到具体 prompt/repeat。
-
-## 3. 构建器的行为
-
-`build_eval_inputs.py` 只做 exact filename match：
-
-```text
-template/.../base-3.mp4  <-  generated_dir/base-3.mp4
-```
-
-如果 `generated_dir` 只有 `base-0.mp4`，命令会失败。这个失败是正确的，因为缺失的 repeat 应该回到生成阶段补齐。
-
-## 4. 验收器的行为
-
-`validate_case_input.py` 默认检查：
-
-1. mp4 数量是否符合预期；
-2. 每个 base 是否拥有 `0..4` 完整 repeat；
-3. 同一 base 的 5 个 repeat 是否 SHA256 完全相同。
-
-第 3 项用于发现“复制一个视频凑 5 份”的非标准输入。极少数特殊实验确实需要放行时，才显式添加：
+输入构建命令：
 
 ```bash
---allow-identical-repeat-files
+python -m hif4_vbench_i2v.build_eval_inputs \
+  --template-case /path/to/template \
+  --generated-dir /path/to/exact_repeats \
+  --out-case /path/to/out_case \
+  --repeat-policy exact \
+  --copy-mode physical
 ```
+
+`base-3.mp4` 模板只能由同名源文件填充；缺少任何 repeat 都会失败。
+
+## 2. `replicate-base`：历史 scale60 兼容复现
+
+已完成的 Wan2.2 HiF4/MXFP4 scale60 实验每个 pair 只生成一个基础视频，然后物理
+复制到 evaluator 所要求的 5 个 repeat 文件名。该策略用于保持既有多格式实验口径，
+**不是五次独立采样**。
+
+必须显式确认：
+
+```bash
+python -m hif4_vbench_i2v.build_eval_inputs \
+  --template-case /path/to/template \
+  --generated-dir /path/to/scale60_merged \
+  --out-case /path/to/out_case \
+  --repeat-policy replicate-base \
+  --acknowledge-replicated-repeats \
+  --copy-mode physical
+```
+
+输出会打印：
+
+```text
+WARNING_REPEAT_POLICY=replicate-base
+WARNING_REPEAT_SEMANTICS=one_generated_video_is_physically_copied_to_multiple_repeat_filenames
+```
+
+验收时需要：
+
+```bash
+python -m hif4_vbench_i2v.validate_case_input \
+  --case-input /path/to/out_case \
+  --expected-sb 200 \
+  --expected-camera 100 \
+  --expected-repeats 5 \
+  --allow-identical-repeat-files \
+  --forbid-symlink
+```
+
+论文或报告中应写成“基础视频物理扩展以匹配 evaluator 输入布局”，不能写成
+“每个 pair 独立采样 5 次”。
+
+## 3. 推荐 seed manifest
+
+新实验建议记录：
+
+```text
+filename  prompt  image_name  dimension  repeat_index  seed  variant  checkpoint
+```
+
+这样可以确认 repeat、seed、variant 和 checkpoint 的对应关系。
+
+## 4. 通用验收
+
+无论使用哪种策略，都应检查：
+
+1. mp4 数量；
+2. `0..4` 文件名布局；
+3. 是否含 symlink；
+4. repeat 策略和 seed manifest；
+5. 生成参数是否在不同格式间一致。
