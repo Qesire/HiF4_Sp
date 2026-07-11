@@ -1,9 +1,4 @@
-"""重建 VBench-I2V exact-repeat 输入目录。
-
-本脚本只从已经真实生成的 exact repeat 源视频中复制同名文件；它不会把
-``base-0.mp4`` 扩展复制成 ``base-1.mp4`` ... ``base-4.mp4``。如果缺少某个
-repeat，说明生成阶段不完整，应该回到生成脚本按不同 seed/index 补生成。
-"""
+"""重建 VBench-I2V 输入目录，支持严格 exact 与历史 replicate-base 策略。"""
 
 from __future__ import annotations
 
@@ -12,21 +7,26 @@ from pathlib import Path
 
 from .build_eval_inputs import replace_from_template
 from .constants import CAM_GROUP, SB_GROUP
-from .utils import build_video_name_index, count_symlinks
+from .utils import build_video_index, build_video_name_index, count_symlinks
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="按 strict exact-repeat 规则重建 HiF4 case input")
-    ap.add_argument("--template-case", required=True)
-    ap.add_argument("--case-input", required=True)
-    ap.add_argument("--generated-dir", default=None)
-    ap.add_argument("--subject-dir", default=None)
-    ap.add_argument("--background-dir", default=None)
-    ap.add_argument("--camera-dir", default=None)
-    ap.add_argument("--copy-mode", choices=["physical", "hardlink", "symlink", "reflink"], default="physical")
-    ap.add_argument("--forbid-symlink", action="store_true", default=True, help="默认禁止输出中残留 symlink")
-    ap.add_argument("--allow-symlink", action="store_false", dest="forbid_symlink", help="允许 symlink，仅在确认 VBench scratch/Slurm 节点可访问同一路径时使用")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description="重建 HiF4 case input")
+    parser.add_argument("--template-case", required=True)
+    parser.add_argument("--case-input", required=True)
+    parser.add_argument("--generated-dir", default=None)
+    parser.add_argument("--subject-dir", default=None)
+    parser.add_argument("--background-dir", default=None)
+    parser.add_argument("--camera-dir", default=None)
+    parser.add_argument("--copy-mode", choices=["physical", "hardlink", "symlink", "reflink"], default="physical")
+    parser.add_argument("--repeat-policy", choices=["exact", "replicate-base"], default="exact")
+    parser.add_argument("--acknowledge-replicated-repeats", action="store_true")
+    parser.add_argument("--forbid-symlink", action="store_true", default=True)
+    parser.add_argument("--allow-symlink", action="store_false", dest="forbid_symlink")
+    args = parser.parse_args()
+
+    if args.repeat_policy == "replicate-base" and not args.acknowledge_replicated_repeats:
+        raise SystemExit("replicate-base 必须同时传入 --acknowledge-replicated-repeats")
 
     template = Path(args.template_case)
     case_input = Path(args.case_input)
@@ -35,40 +35,47 @@ def main() -> None:
     if not case_input.is_dir():
         raise SystemExit(f"missing case_input: {case_input}")
 
-    sb_dirs = []
-    cam_dirs = []
+    sb_dirs: list[Path] = []
+    camera_dirs: list[Path] = []
     if args.generated_dir:
         sb_dirs.append(Path(args.generated_dir))
-        cam_dirs.append(Path(args.generated_dir))
+        camera_dirs.append(Path(args.generated_dir))
     if args.subject_dir:
         sb_dirs.append(Path(args.subject_dir))
     if args.background_dir:
         sb_dirs.append(Path(args.background_dir))
     if args.camera_dir:
-        cam_dirs.append(Path(args.camera_dir))
-    if not sb_dirs or not cam_dirs:
+        camera_dirs.append(Path(args.camera_dir))
+    if not sb_dirs or not camera_dirs:
         raise SystemExit("需要 --generated-dir 或 subject/background/camera 专用目录")
 
-    sb_idx = build_video_name_index(sb_dirs)
-    cam_idx = build_video_name_index(cam_dirs)
+    if args.repeat_policy == "exact":
+        sb_index = build_video_name_index(sb_dirs)
+        camera_index = build_video_name_index(camera_dirs)
+    else:
+        sb_index = build_video_index(sb_dirs)
+        camera_index = build_video_index(camera_dirs)
+        print("WARNING_REPEAT_POLICY=replicate-base")
 
     sb_count = replace_from_template(
         template / SB_GROUP / "videos_quant_sb",
         case_input / SB_GROUP / "videos_quant_sb",
-        sb_idx,
+        sb_index,
         args.copy_mode,
+        args.repeat_policy,
     )
-    cam_count = replace_from_template(
+    camera_count = replace_from_template(
         template / CAM_GROUP / "videos_quant_camera",
         case_input / CAM_GROUP / "videos_quant_camera",
-        cam_idx,
+        camera_index,
         args.copy_mode,
+        args.repeat_policy,
     )
 
     links = count_symlinks(case_input)
     print(f"videos_quant_sb={sb_count}")
-    print(f"videos_quant_camera={cam_count}")
-    print("repeat_policy=exact_filename_only")
+    print(f"videos_quant_camera={camera_count}")
+    print(f"repeat_policy={args.repeat_policy}")
     print(f"symlink_count={links}")
     if args.forbid_symlink and links:
         raise SystemExit("检测到 symlink；默认禁止 symlink")
