@@ -1,0 +1,8 @@
+asset_version=v4.9.2-gptq
+created_utc=2026-07-26T12:19:47Z
+kit_root=/home/scc/pb23061276/projects/wan-quant/artifacts/wan_hifx4_lightx2v_distill_kit_v4_9_2
+python=Python 3.13.13
+torch=unavailable:ModuleNotFoundError("No module named 'torch'")
+LIGHTX2V_REPO=
+WAN_W4A4_REPO=
+HIF4_MAIN_REPO=

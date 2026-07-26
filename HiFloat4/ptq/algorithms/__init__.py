@@ -1,0 +1,1 @@
+from .gptq_original import OriginalGPTQConfig, quantize_gptq_original
